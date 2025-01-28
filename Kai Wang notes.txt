@@ -1,0 +1,4 @@
+Kai Wang notes
+
+Quickstart complete.
+Documentation might need reformatting. Difficult and tedious for windows users
