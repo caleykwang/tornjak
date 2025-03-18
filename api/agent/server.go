@@ -19,7 +19,6 @@ import (
 	"github.com/spiffe/tornjak/pkg/agent/authorization"
 	agentdb "github.com/spiffe/tornjak/pkg/agent/db"
 	"github.com/spiffe/tornjak/pkg/agent/spirecrd"
-	"github.com/spiffe/tornjak/api/hello"	
 )
 
 type Server struct {
@@ -49,13 +48,6 @@ type hclPluginConfig struct {
 	Enabled        *bool    `hcl:"enabled"`
 }
 
-
-func main() {
-    // other route setups…
-    http.HandleFunc("/api/hello", hello.HelloHandler)
-    // start the server
-    http.ListenAndServe(":50000", nil)
-}
 func cors(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
