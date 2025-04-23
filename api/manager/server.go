@@ -86,6 +86,21 @@ func (s *Server) apiServerProxyFunc(apiPath, apiMethod string) http.HandlerFunc 
 	}
 }
 
+// forwardResponse executes the outbound request and streams headers/body back
+// to the original client, preserving status codes.
+func forwardResponse(w http.ResponseWriter, client *http.Client, req *http.Request) error {
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	copyHeader(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	_, err = io.Copy(w, resp.Body)
+	return err
+}
+
 // prepareServerClient fetches server metadata from the DB and returns both the
 // metadata and a configured *http.Client.
 func (s *Server) prepareServerClient(name string) (*managerdb.ServerInfo, *http.Client, error) {
@@ -94,7 +109,8 @@ func (s *Server) prepareServerClient(name string) (*managerdb.ServerInfo, *http.
 		return nil, nil, fmt.Errorf("DB lookup failed: %w", err)
 	}
 
-
+	// Emit concise debug info (unchanged logic, but extracted for clarity)
+	debugServerInfo(sinfo)
 
 	client, err := sinfo.HttpClient()
 	if err != nil {
@@ -122,6 +138,7 @@ func buildProxyRequest(src *http.Request, baseAddr, apiPath, method string) (*ht
 	}
 	return req, nil
 }
+// ---------- helpers ----------
 
 func debugServerInfo(sinfo *managerdb.ServerInfo) {
 	trim := func(s string, max int) string {
