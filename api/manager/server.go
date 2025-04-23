@@ -94,8 +94,7 @@ func (s *Server) prepareServerClient(name string) (*managerdb.ServerInfo, *http.
 		return nil, nil, fmt.Errorf("DB lookup failed: %w", err)
 	}
 
-	// Emit concise debug info (unchanged logic, but extracted for clarity)
-	debugServerInfo(sinfo)
+
 
 	client, err := sinfo.HttpClient()
 	if err != nil {
@@ -124,6 +123,24 @@ func buildProxyRequest(src *http.Request, baseAddr, apiPath, method string) (*ht
 	return req, nil
 }
 
+func debugServerInfo(sinfo *managerdb.ServerInfo) {
+	trim := func(s string, max int) string {
+		if len(s) <= max {
+			return s
+		}
+		return "\n..." + s[len(s)-max:]
+	}
+	fmt.Printf("Name:%s  Address:%s  TLS:%t  mTLS:%t\n",
+		sinfo.Name, sinfo.Address, sinfo.TLS, sinfo.MTLS)
+	if sinfo.TLS {
+		fmt.Printf("CA:%s\n", trim(string(sinfo.CA), certShowLen))
+	}
+	if sinfo.MTLS {
+		fmt.Printf("Cert:%s\nKey:%s\n",
+			trim(string(sinfo.Cert), certShowLen),
+			trim(string(sinfo.Key), keyShowLen))
+	}
+}
 
 // spaHandler implements the http.Handler interface, so we can use it
 // to respond to HTTP requests. The path to the static directory and
