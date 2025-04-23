@@ -58,81 +58,72 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
-// Returns a post proxy function for tornjak api, where path is the path from the base URL, i.e. "/api/entry/delete"
-func (s *Server) apiServerProxyFunc(apiPath string, apiMethod string) func(w http.ResponseWriter, r *http.Request) {
+// apiServerProxyFunc returns an http.HandlerFunc that proxies a request to the
+// given Tornjak / SPIRE API path, honouring the per-server TLS / mTLS settings
+// stored in the manager DB.
+func (s *Server) apiServerProxyFunc(apiPath, apiMethod string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		serverName := vars["server"]
+		serverName := mux.Vars(r)["server"]
 
-		fmt.Println(serverName)
-
-		// Get server info
-		sinfo, err := s.db.GetServer(serverName)
+		// 1. Resolve server entry & client
+		sinfo, client, err := s.prepareServerClient(serverName)
 		if err != nil {
-			emsg := fmt.Sprintf("Error getting server info: %v", err.Error())
-			retError(w, emsg, http.StatusBadRequest)
+			retError(w, fmt.Sprintf("Error preparing client: %v", err), http.StatusBadRequest)
 			return
 		}
 
-		// Gather the certs and key into a map
-		cMap := make(map[string]string)
-		cMap["CA"] = string(sinfo.CA)
-		cMap["cert"] = string(sinfo.Cert)
-		cMap["key"] = string(sinfo.Key)
-
-		// Iterate through the map and trim the values for debugging.
-		// Show the endings only
-		for k, v := range cMap {
-			if k == "key" {
-				if len(v) > keyShowLen {
-					cMap[k] = "\n..." + v[len(v)-keyShowLen:]
-				}
-			} else {
-				if len(v) > certShowLen {
-					cMap[k] = "\n..." + v[len(v)-certShowLen:]
-				}
-			}
-		}
-		fmt.Printf("Name:%s\n Address:%s\n TLS:%t, mTLS:%t\n", sinfo.Name, sinfo.Address, sinfo.TLS, sinfo.MTLS)
-		if sinfo.TLS {
-			fmt.Printf("CA:%s\n", cMap["CA"])
-		}
-		if sinfo.MTLS {
-			fmt.Printf("Cert:%s\n Key:%s\n", cMap["cert"], cMap["key"])
-		}
-
-		client, err := sinfo.HttpClient()
+		// 2. Build outbound request
+		req, err := buildProxyRequest(r, sinfo.Address, apiPath, apiMethod)
 		if err != nil {
-			emsg := fmt.Sprintf("Error initializing server client: %v", err.Error())
-			retError(w, emsg, http.StatusBadRequest)
+			retError(w, fmt.Sprintf("Error creating request: %v", err), http.StatusBadRequest)
 			return
 		}
 
-		req, err := http.NewRequest(apiMethod, strings.TrimSuffix(sinfo.Address, "/") + apiPath, r.Body)
-		if err != nil {
-			emsg := fmt.Sprintf("Error creating http request: %v", err.Error())
-			retError(w, emsg, http.StatusBadRequest)
-			return
-		}
-
-		
-		resp, err := client.Do(req)
-		if err != nil {
-			emsg := fmt.Sprintf("Error making api call to server: %v", err.Error())
-			retError(w, emsg, http.StatusBadRequest)
-			return
-		}
-		defer resp.Body.Close()
-		copyHeader(w.Header(), resp.Header)
-		w.WriteHeader(resp.StatusCode)
-		_, err = io.Copy(w, resp.Body)
-		if err != nil {
-			emsg := fmt.Sprintf("Error parsing data: %v", err.Error())
-			retError(w, emsg, http.StatusBadRequest)
-			return
+		// 3. Perform request & stream response
+		if err := forwardResponse(w, client, req); err != nil {
+			retError(w, fmt.Sprintf("Error forwarding response: %v", err), http.StatusBadGateway)
 		}
 	}
 }
+
+// prepareServerClient fetches server metadata from the DB and returns both the
+// metadata and a configured *http.Client.
+func (s *Server) prepareServerClient(name string) (*managerdb.ServerInfo, *http.Client, error) {
+	sinfo, err := s.db.GetServer(name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("DB lookup failed: %w", err)
+	}
+
+	// Emit concise debug info (unchanged logic, but extracted for clarity)
+	debugServerInfo(sinfo)
+
+	client, err := sinfo.HttpClient()
+	if err != nil {
+		return nil, nil, err
+	}
+	return sinfo, client, nil
+}
+
+// buildProxyRequest constructs a new outbound request that preserves the
+// incoming body and headers but targets the SPIRE/Tornjak endpoint.
+func buildProxyRequest(src *http.Request, baseAddr, apiPath, method string) (*http.Request, error) {
+	targetURL := strings.TrimSuffix(baseAddr, "/") + apiPath
+
+	req, err := http.NewRequest(method, targetURL, src.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Forward content-type & auth headers if present
+	for k, v := range src.Header {
+		// Typical allow-list; extend as needed
+		if k == "Content-Type" || k == "Authorization" {
+			req.Header[k] = v
+		}
+	}
+	return req, nil
+}
+
 
 // spaHandler implements the http.Handler interface, so we can use it
 // to respond to HTTP requests. The path to the static directory and
