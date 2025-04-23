@@ -289,48 +289,57 @@ func NewManagerServer(listenAddr, dbString string) (*Server, error) {
 	}, nil
 }
 
+// serverList returns a list of servers stored in the manager DB.
+// If the request body is empty, an empty ListServersRequest is assumed.
+// It always responds with JSON or an HTTP error.
 func (s *Server) serverList(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Endpoint Hit: Server List")
+	fmt.Println("Endpoint Hit: /manager-api/server/list")
 
-	buf := new(strings.Builder)
-
-	n, err := io.Copy(buf, r.Body)
-	if err != nil {
-		emsg := fmt.Sprintf("Error parsing data: %v", err.Error())
-		retError(w, emsg, http.StatusBadRequest)
+	// ---------------------------------------------------------------------
+	// 1. Parse (optional) JSON body ---------------------------------------
+	//    The body MAY contain filtering options.  If it is empty or only
+	//    whitespace, we treat it as "no filters" instead of an error.
+	// ---------------------------------------------------------------------
+	var req ListServersRequest
+	if err := decodeOptionalJSON(r.Body, &req); err != nil {
+		retError(w, fmt.Sprintf("Error parsing request: %v", err), http.StatusBadRequest)
 		return
 	}
-	data := buf.String()
 
-	var input ListServersRequest
-	if n == 0 {
-		input = ListServersRequest{}
-	} else {
-		err := json.Unmarshal([]byte(data), &input)
-		if err != nil {
-			emsg := fmt.Sprintf("Error parsing data: %v", err.Error())
-			retError(w, emsg, http.StatusBadRequest)
-			return
-		}
-	}
-
-	ret, err := s.ListServers(input)
+	// ---------------------------------------------------------------------
+	// 2. Fetch the data from the DB layer ---------------------------------
+	// ---------------------------------------------------------------------
+	resp, err := s.ListServers(req)
 	if err != nil {
-		emsg := fmt.Sprintf("Error: %v", err.Error())
-		retError(w, emsg, http.StatusBadRequest)
+		retError(w, fmt.Sprintf("Error: %v", err), http.StatusBadRequest)
 		return
 	}
-	cors(w, r)
 
-	je := json.NewEncoder(w)
-	err = je.Encode(ret)
-
-	if err != nil {
-		emsg := fmt.Sprintf("Error: %v", err.Error())
-		retError(w, emsg, http.StatusBadRequest)
-		return
+	// ---------------------------------------------------------------------
+	// 3. Marshal response as JSON and send it -----------------------------
+	// ---------------------------------------------------------------------
+	cors(w, r)                                   // set CORS + content-type headers
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		retError(w, fmt.Sprintf("Error: %v", err), http.StatusBadRequest)
 	}
 }
+
+// decodeOptionalJSON tries to decode JSON from r into dst.
+// It returns nil when the body is empty (EOF before any data).
+func decodeOptionalJSON(r io.ReadCloser, dst any) error {
+	defer r.Close()
+
+	dec := json.NewDecoder(r)
+	if err := dec.Decode(dst); err != nil {
+		// Empty body is fine → treat as "no input"
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 
 func (s *Server) serverRegister(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Endpoint Hit: Server Create")
