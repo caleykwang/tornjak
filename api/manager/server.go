@@ -201,49 +201,69 @@ func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.FileServer(http.Dir(h.staticPath)).ServeHTTP(w, r)
 }
 
+// HandleRequests wires up every HTTP route and blocks in ListenAndServe.
 func (s *Server) HandleRequests() {
-	// TO implement
-	rtr := mux.NewRouter()
+	r := mux.NewRouter()
 
-	// Manger-specific
-	rtr.HandleFunc("/manager-api/server/list", corsHandler(s.serverList))
-	rtr.HandleFunc("/manager-api/server/register", corsHandler(s.serverRegister))
+	// --- manager API --------------------------------------------------------
+	addRoutes(r, map[string]http.HandlerFunc{
+		"/manager-api/server/list":     s.serverList,
+		"/manager-api/server/register": s.serverRegister,
+	})
 
-	// SPIRE server info calls
-	rtr.HandleFunc("/manager-api/healthcheck/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/spire/healthcheck", http.MethodGet)))
-	rtr.HandleFunc("/manager-api/serverinfo/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/spire/serverinfo", http.MethodGet)))
+	// --- SPIRE core ---------------------------------------------------------
+	addSpireRoutes := func(prefix string) {
+		addProxy(r, prefix+"/healthcheck/{server:.*}",  "/api/v1/spire/healthcheck", http.MethodGet)
+		addProxy(r, prefix+"/serverinfo/{server:.*}",   "/api/v1/spire/serverinfo",  http.MethodGet)
 
-	// Entries
-	rtr.HandleFunc("/manager-api/entry/list/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/spire/entries", http.MethodGet)))
-	rtr.HandleFunc("/manager-api/entry/delete/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/spire/entries", http.MethodDelete)))
-	rtr.HandleFunc("/manager-api/entry/create/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/spire/entries", http.MethodPost)))
+		addProxy(r, prefix+"/entry/list/{server:.*}",   "/api/v1/spire/entries",     http.MethodGet)
+		addProxy(r, prefix+"/entry/create/{server:.*}", "/api/v1/spire/entries",     http.MethodPost)
+		addProxy(r, prefix+"/entry/delete/{server:.*}", "/api/v1/spire/entries",     http.MethodDelete)
 
-	// Agents
-	rtr.HandleFunc("/manager-api/agent/list/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/spire/agents", http.MethodGet)))
-	rtr.HandleFunc("/manager-api/agent/delete/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/spire/agents", http.MethodDelete)))
-	rtr.HandleFunc("/manager-api/agent/ban/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/spire/agents/ban", http.MethodPost)))
-	rtr.HandleFunc("/manager-api/agent/createjointoken/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/spire/agents/jointoken", http.MethodPost)))
+		addProxy(r, prefix+"/agent/list/{server:.*}",          "/api/v1/spire/agents",           http.MethodGet)
+		addProxy(r, prefix+"/agent/delete/{server:.*}",        "/api/v1/spire/agents",           http.MethodDelete)
+		addProxy(r, prefix+"/agent/ban/{server:.*}",           "/api/v1/spire/agents/ban",       http.MethodPost)
+		addProxy(r, prefix+"/agent/createjointoken/{server:.*}","/api/v1/spire/agents/jointoken",http.MethodPost)
+	}
+	addSpireRoutes("/manager-api")
 
-	// Tornjak-specific
-	rtr.HandleFunc("/manager-api/tornjak/serverinfo/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/tornjak/serverinfo", http.MethodGet)))
-	// Agents Selectors
-	rtr.HandleFunc("/manager-api/tornjak/selectors/register/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/tornjak/selectors", http.MethodPost)))
-	rtr.HandleFunc("/manager-api/tornjak/selectors/list/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/tornjak/selectors", http.MethodGet)))
-	rtr.HandleFunc("/manager-api/tornjak/agents/list/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/tornjak/agents", http.MethodGet)))
-	// Agents Clusters
-	rtr.HandleFunc("/manager-api/tornjak/clusters/create/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/tornjak/clusters", http.MethodPost)))
-	rtr.HandleFunc("/manager-api/tornjak/clusters/edit/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/tornjak/clusters", http.MethodPatch)))
-	rtr.HandleFunc("/manager-api/tornjak/clusters/list/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/tornjak/clusters", http.MethodGet)))
-	rtr.HandleFunc("/manager-api/tornjak/clusters/delete/{server:.*}", corsHandler(s.apiServerProxyFunc("/api/v1/tornjak/clusters", http.MethodDelete)))
+	// --- Tornjak extensions -------------------------------------------------
+	addTornjakRoutes := func(prefix string) {
+		addProxy(r, prefix+"/serverinfo/{server:.*}",               "/api/v1/tornjak/serverinfo", http.MethodGet)
 
-	//http.HandleFunc("/manager-api/get-server-info", s.agentList)
-	//http.HandleFunc("/manager-api/agent/list/:id", s.agentList)
+		addProxy(r, prefix+"/selectors/register/{server:.*}",       "/api/v1/tornjak/selectors",  http.MethodPost)
+		addProxy(r, prefix+"/selectors/list/{server:.*}",           "/api/v1/tornjak/selectors",  http.MethodGet)
+		addProxy(r, prefix+"/agents/list/{server:.*}",              "/api/v1/tornjak/agents",     http.MethodGet)
 
+		addProxy(r, prefix+"/clusters/create/{server:.*}",          "/api/v1/tornjak/clusters",   http.MethodPost)
+		addProxy(r, prefix+"/clusters/edit/{server:.*}",            "/api/v1/tornjak/clusters",   http.MethodPatch)
+		addProxy(r, prefix+"/clusters/list/{server:.*}",            "/api/v1/tornjak/clusters",   http.MethodGet)
+		addProxy(r, prefix+"/clusters/delete/{server:.*}",          "/api/v1/tornjak/clusters",   http.MethodDelete)
+	}
+	addTornjakRoutes("/manager-api/tornjak")
+
+	// --- static SPA ---------------------------------------------------------
 	spa := spaHandler{staticPath: "ui-manager", indexPath: "index.html"}
-	rtr.PathPrefix("/").Handler(spa)
+	r.PathPrefix("/").Handler(spa)
 
-	fmt.Println("Starting to listen...")
-	log.Fatal(http.ListenAndServe(s.listenAddr, rtr))
+	fmt.Printf("Manager API listening on %s …\n", s.listenAddr)
+	log.Fatal(http.ListenAndServe(s.listenAddr, r))
+}
+
+//
+// ---------- tiny helpers  --------------
+//
+
+// addRoutes registers simple (non-proxy) handlers and wraps them in CORS.
+func addRoutes(r *mux.Router, routes map[string]http.HandlerFunc) {
+	for path, h := range routes {
+		r.HandleFunc(path, corsHandler(h))
+	}
+}
+
+// addProxy is a convenience shim around apiServerProxyFunc + CORS.
+func (s *Server) addProxy(r *mux.Router, pattern, apiPath, method string) {
+	r.HandleFunc(pattern, corsHandler(s.apiServerProxyFunc(apiPath, method)))
 }
 
 /*
